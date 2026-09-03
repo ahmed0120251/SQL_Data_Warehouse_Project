@@ -1,10 +1,11 @@
 /*
 ===============================================================================
-Script Name : 03_create_silver_tables.sql
-Author      : Ahmed Mohamed Ali
-Description : DDL for Silver Layer (Cleaned & Standardized Staging).
-              Defines structured tables with optimized data types and 
-              incorporates metadata columns (dwh_create_date).
+DDL Script: Create Silver Tables
+===============================================================================
+Script Purpose:
+    This script creates tables in the 'silver' schema, dropping existing tables 
+    if they already exist.
+	  Run this script to re-define the DDL structure of 'bronze' Tables
 ===============================================================================
 */
 
