@@ -1,0 +1,43 @@
+# 📂 Databases
+
+This folder is a placeholder for the raw source data used by this project. The actual CSV files are **not included in this repository** (see reasoning below) — download them from the original source before running the Bronze Layer scripts.
+
+---
+
+## 📥 Data Source
+
+**Brazilian E-Commerce Public Dataset by Olist** (Kaggle):
+🔗 https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce
+
+---
+
+## 📄 Required Files
+
+Download the following CSV files from the Kaggle link above and place them in this folder before running the Bronze Layer load scripts:
+
+| Source File (Kaggle) | Loaded Into |
+|---|---|
+| `olist_customers_dataset.csv` | `bronze.crm_customers` |
+| `olist_orders_dataset.csv` | `bronze.crm_orders` |
+| `olist_order_items_dataset.csv` | `bronze.crm_order_items` |
+| `olist_order_payments_dataset.csv` | `bronze.crm_order_payments` |
+| `olist_products_dataset.csv` | `bronze.erp_products` |
+| `olist_sellers_dataset.csv` | `bronze.erp_sellers` |
+| `olist_geolocation_dataset.csv` | `bronze.erp_geolocation` |
+| `product_category_name_translation.csv` | `bronze.erp_category_translation` |
+
+---
+
+## ❓ Why isn't the raw data included in this repo?
+
+- **Size**: the raw CSV files are large enough to make the repository slow to clone.
+- **Licensing**: the dataset is published on Kaggle under its own license — linking to the original source is preferred over redistributing it.
+- **Best practice**: most data warehouse portfolio projects reference the source rather than re-hosting the raw files.
+
+---
+
+## ⚙️ Setup
+
+1. Download the CSV files listed above from Kaggle.
+2. Place them in this `Databases/` folder.
+3. Run the Bronze Layer scripts in `scripts/bronze/` to load them into SQL Server.
