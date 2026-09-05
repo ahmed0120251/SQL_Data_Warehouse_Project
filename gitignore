@@ -1,0 +1,18 @@
+# Raw data files (see Databases/README.md for source link)
+Databases/*.csv
+Databases/*.xlsx
+
+# SQL Server / SSMS temp files
+*.suo
+*.user
+.vs/
+
+# VS Code
+.vscode/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
