@@ -1,1 +1,134 @@
 
+/*
+===============================================================================
+Database Exploration
+===============================================================================
+Purpose:
+    - To explore the structure of the Gold layer.
+    - To retrieve the list of tables/views and their schemas.
+    - To inspect the columns and metadata of Gold objects.
+===============================================================================
+*/
+
+
+-- ============================================================================
+-- 01. Retrieve a list of all objects in the Gold schema
+-- ============================================================================
+
+SELECT
+    TABLE_CATALOG,
+    TABLE_SCHEMA,
+    TABLE_NAME,
+    TABLE_TYPE
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'gold'
+ORDER BY TABLE_NAME;
+
+
+-- ============================================================================
+-- 02. Retrieve all columns and metadata for Gold objects
+-- ============================================================================
+
+SELECT
+    TABLE_NAME,
+    ORDINAL_POSITION,
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE,
+    CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'gold'
+ORDER BY
+    TABLE_NAME,
+    ORDINAL_POSITION;
+
+
+-- ============================================================================
+-- 03. Explore the Customer Dimension
+-- ============================================================================
+
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE,
+    CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'gold'
+  AND TABLE_NAME = 'dim_customers'
+ORDER BY ORDINAL_POSITION;
+
+
+-- ============================================================================
+-- 04. Explore the Seller Dimension
+-- ============================================================================
+
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE,
+    CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'gold'
+  AND TABLE_NAME = 'dim_sellers'
+ORDER BY ORDINAL_POSITION;
+
+
+-- ============================================================================
+-- 05. Explore the Product Dimension
+-- ============================================================================
+
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE,
+    CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'gold'
+  AND TABLE_NAME = 'dim_products'
+ORDER BY ORDINAL_POSITION;
+
+
+-- ============================================================================
+-- 06. Explore the Date Dimension
+-- ============================================================================
+
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE,
+    CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'gold'
+  AND TABLE_NAME = 'dim_date'
+ORDER BY ORDINAL_POSITION;
+
+
+-- ============================================================================
+-- 07. Explore the Sales Fact
+-- ============================================================================
+
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE,
+    CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'gold'
+  AND TABLE_NAME = 'fact_sales'
+ORDER BY ORDINAL_POSITION;
+
+
+-- ============================================================================
+-- 08. Explore the Payments Fact
+-- ============================================================================
+
+SELECT
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE,
+    CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'gold'
+  AND TABLE_NAME = 'fact_payments'
+ORDER BY ORDINAL_POSITION;
+
