@@ -1,0 +1,258 @@
+/*
+===============================================================================
+Business Analysis: Customer & Product Performance
+===============================================================================
+Business Question:
+    What are customers buying, and which products and categories
+    drive customer demand?
+
+Focus:
+    - Product demand
+    - Product revenue
+    - Customer reach
+    - Category order volume
+    - Volume vs. revenue performance
+===============================================================================
+*/
+
+
+-- =============================================================================
+-- 03.1 Most Frequently Purchased Products
+-- =============================================================================
+/*
+Business Question:
+    Which products are purchased most frequently?
+
+Business Logic:
+    Purchase frequency is measured by the number of delivered order items.
+*/
+
+SELECT TOP 10
+    p.product_id,
+    COALESCE(
+        p.category_name_english,
+        p.category_name,
+        'Unknown'
+    ) AS category_name,
+    COUNT(*) AS units_sold
+FROM gold.fact_sales fs
+JOIN gold.dim_products p
+    ON fs.product_key = p.product_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    p.product_id,
+    COALESCE(
+        p.category_name_english,
+        p.category_name,
+        'Unknown'
+    )
+ORDER BY
+    units_sold DESC;
+
+
+-- =============================================================================
+-- 03.2 Highest Revenue-Generating Products
+-- =============================================================================
+/*
+Business Question:
+    Which products generate the highest revenue?
+*/
+
+SELECT TOP 10
+    p.product_id,
+    COALESCE(
+        p.category_name_english,
+        p.category_name,
+        'Unknown'
+    ) AS category_name,
+    SUM(fs.total_item_value) AS total_revenue
+FROM gold.fact_sales fs
+JOIN gold.dim_products p
+    ON fs.product_key = p.product_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    p.product_id,
+    COALESCE(
+        p.category_name_english,
+        p.category_name,
+        'Unknown'
+    )
+ORDER BY
+    total_revenue DESC;
+
+
+-- =============================================================================
+-- 03.3 Categories with the Most Unique Customers
+-- =============================================================================
+/*
+Business Question:
+    Which categories attract the largest number of unique customers?
+
+Business Logic:
+    Customer reach is based on distinct customers, not order volume.
+*/
+
+SELECT TOP 10
+    COALESCE(
+        p.category_name_english,
+        p.category_name,
+        'Unknown'
+    ) AS category_name,
+    COUNT(DISTINCT fs.customer_key) AS unique_customers
+FROM gold.fact_sales fs
+JOIN gold.dim_products p
+    ON fs.product_key = p.product_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    COALESCE(
+        p.category_name_english,
+        p.category_name,
+        'Unknown'
+    )
+ORDER BY
+    unique_customers DESC;
+
+
+-- =============================================================================
+-- 03.4 Categories with the Highest Order Volume
+-- =============================================================================
+/*
+Business Question:
+    Which categories generate the highest number of orders?
+*/
+
+SELECT TOP 10
+    COALESCE(
+        p.category_name_english,
+        p.category_name,
+        'Unknown'
+    ) AS category_name,
+    COUNT(DISTINCT fs.order_id) AS order_volume
+FROM gold.fact_sales fs
+JOIN gold.dim_products p
+    ON fs.product_key = p.product_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    COALESCE(
+        p.category_name_english,
+        p.category_name,
+        'Unknown'
+    )
+ORDER BY
+    order_volume DESC;
+
+
+-- =============================================================================
+-- 03.5 High-Volume / Low-Revenue Products
+-- =============================================================================
+/*
+Business Question:
+    Which products have high sales volume but relatively low revenue?
+
+Business Logic:
+    A positive rank gap indicates that a product ranks better by volume
+    than by revenue.
+*/
+
+WITH product_metrics AS (
+    SELECT
+        p.product_id,
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        ) AS category_name,
+        COUNT(*) AS units_sold,
+        SUM(fs.total_item_value) AS total_revenue
+    FROM gold.fact_sales fs
+    JOIN gold.dim_products p
+        ON fs.product_key = p.product_key
+    WHERE fs.order_status = 'delivered'
+    GROUP BY
+        p.product_id,
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        )
+),
+ranked_products AS (
+    SELECT
+        *,
+        RANK() OVER (
+            ORDER BY units_sold DESC
+        ) AS volume_rank,
+        RANK() OVER (
+            ORDER BY total_revenue DESC
+        ) AS revenue_rank
+    FROM product_metrics
+)
+SELECT TOP 10
+    product_id,
+    category_name,
+    units_sold,
+    total_revenue,
+    volume_rank,
+    revenue_rank,
+    revenue_rank - volume_rank AS rank_gap
+FROM ranked_products
+ORDER BY
+    rank_gap DESC;
+
+
+-- =============================================================================
+-- 03.6 Low-Volume / High-Revenue Products
+-- =============================================================================
+/*
+Business Question:
+    Which products have low sales volume but relatively high revenue?
+
+Business Logic:
+    A negative rank gap indicates that a product ranks better by revenue
+    than by volume.
+*/
+
+WITH product_metrics AS (
+    SELECT
+        p.product_id,
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        ) AS category_name,
+        COUNT(*) AS units_sold,
+        SUM(fs.total_item_value) AS total_revenue
+    FROM gold.fact_sales fs
+    JOIN gold.dim_products p
+        ON fs.product_key = p.product_key
+    WHERE fs.order_status = 'delivered'
+    GROUP BY
+        p.product_id,
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        )
+),
+ranked_products AS (
+    SELECT
+        *,
+        RANK() OVER (
+            ORDER BY units_sold DESC
+        ) AS volume_rank,
+        RANK() OVER (
+            ORDER BY total_revenue DESC
+        ) AS revenue_rank
+    FROM product_metrics
+)
+SELECT TOP 10
+    product_id,
+    category_name,
+    units_sold,
+    total_revenue,
+    volume_rank,
+    revenue_rank,
+    revenue_rank - volume_rank AS rank_gap
+FROM ranked_products
+ORDER BY
+    rank_gap ASC;
