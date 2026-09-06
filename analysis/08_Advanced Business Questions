@@ -1,0 +1,515 @@
+/*
+===============================================================================
+Business Analysis: Advanced Business Questions
+===============================================================================
+Business Question:
+    What deeper insights emerge when we combine multiple aspects
+    of business performance?
+
+Focus:
+    - Growth vs. operational health
+    - Revenue concentration and risk
+    - Customer engagement risk
+    - Product and category benchmarking
+    - Cross-category customer behavior
+    - Low-activity market opportunities
+===============================================================================
+*/
+
+
+/*
+Business Question:
+    Which sellers are growing revenue while their delivery performance is
+    getting worse?
+
+Business Logic:
+    Compare recent vs. earlier six-month performance at the order level.
+    Sellers with revenue growth but increasing late-delivery rates represent
+    hidden operational risk.
+*/
+WITH order_level AS
+(
+    SELECT
+        seller_key,
+        order_id,
+        MAX(total_item_value) AS order_value,
+        MAX(purchased_at) AS purchased_at,
+        MAX(delivered_at) AS delivered_at,
+        MAX(estimated_delivery_at) AS estimated_delivery_at
+    FROM gold.fact_sales
+    WHERE order_status = 'delivered'
+      AND delivered_at IS NOT NULL
+    GROUP BY seller_key, order_id
+),
+period_split AS
+(
+    SELECT
+        seller_key,
+        order_id,
+        order_value,
+        CASE
+            WHEN purchased_at >= DATEADD(
+                MONTH,
+                -6,
+                (SELECT MAX(purchased_at) FROM order_level)
+            )
+            THEN 'Recent'
+            ELSE 'Earlier'
+        END AS period,
+        CASE
+            WHEN delivered_at > estimated_delivery_at THEN 1.0
+            ELSE 0.0
+        END AS is_late
+    FROM order_level
+),
+seller_period_metrics AS
+(
+    SELECT
+        s.seller_id,
+        p.period,
+        SUM(p.order_value) AS revenue,
+        AVG(p.is_late) AS late_rate
+    FROM period_split p
+    JOIN gold.dim_sellers s
+        ON p.seller_key = s.seller_key
+    GROUP BY
+        s.seller_id,
+        p.period
+),
+pivoted AS
+(
+    SELECT
+        seller_id,
+        MAX(CASE WHEN period = 'Recent' THEN revenue END) AS recent_revenue,
+        MAX(CASE WHEN period = 'Earlier' THEN revenue END) AS earlier_revenue,
+        MAX(CASE WHEN period = 'Recent' THEN late_rate END) AS recent_late_rate,
+        MAX(CASE WHEN period = 'Earlier' THEN late_rate END) AS earlier_late_rate
+    FROM seller_period_metrics
+    GROUP BY seller_id
+)
+SELECT
+    seller_id,
+    earlier_revenue,
+    recent_revenue,
+    CAST(
+        (recent_revenue - earlier_revenue) * 100.0
+        / NULLIF(earlier_revenue, 0)
+        AS DECIMAL(6,2)
+    ) AS revenue_growth_pct,
+    earlier_late_rate,
+    recent_late_rate,
+    CAST(
+        (recent_late_rate - earlier_late_rate) * 100.0
+        AS DECIMAL(6,2)
+    ) AS late_rate_change_pts
+FROM pivoted
+WHERE recent_revenue > earlier_revenue
+  AND recent_late_rate > earlier_late_rate
+ORDER BY revenue_growth_pct DESC;
+GO
+
+
+/*
+Business Question:
+    Which sellers generate high revenue while also having high
+    late-delivery rates?
+
+Business Logic:
+    Sellers are ranked into quartiles to identify relative
+    high-revenue and high-risk groups.
+*/
+WITH seller_metrics AS
+(
+    SELECT
+        s.seller_id,
+        SUM(fs.total_item_value) AS total_revenue,
+        AVG(
+            CASE
+                WHEN fs.delivered_at > fs.estimated_delivery_at THEN 1.0
+                ELSE 0.0
+            END
+        ) AS late_rate
+    FROM gold.fact_sales fs
+    JOIN gold.dim_sellers s
+        ON fs.seller_key = s.seller_key
+    WHERE fs.order_status = 'delivered'
+      AND fs.delivered_at IS NOT NULL
+    GROUP BY s.seller_id
+    HAVING COUNT(DISTINCT fs.order_id) >= 10
+),
+scored AS
+(
+    SELECT
+        *,
+        NTILE(4) OVER (ORDER BY total_revenue) AS revenue_quartile,
+        NTILE(4) OVER (ORDER BY late_rate) AS late_rate_quartile
+    FROM seller_metrics
+)
+SELECT
+    seller_id,
+    total_revenue,
+    late_rate
+FROM scored
+WHERE revenue_quartile = 4
+  AND late_rate_quartile = 4
+ORDER BY total_revenue DESC;
+GO
+
+
+/*
+Business Question:
+    How concentrated is marketplace revenue among sellers?
+
+Business Logic:
+    Calculates cumulative revenue and cumulative seller share
+    to identify marketplace concentration.
+*/
+WITH seller_revenue AS
+(
+    SELECT
+        s.seller_id,
+        SUM(fs.total_item_value) AS revenue
+    FROM gold.fact_sales fs
+    JOIN gold.dim_sellers s
+        ON fs.seller_key = s.seller_key
+    WHERE fs.order_status = 'delivered'
+    GROUP BY s.seller_id
+),
+ranked AS
+(
+    SELECT
+        seller_id,
+        revenue,
+        ROW_NUMBER() OVER (ORDER BY revenue DESC) AS seller_rank,
+        COUNT(*) OVER () AS total_sellers,
+        SUM(revenue) OVER () AS total_revenue,
+        SUM(revenue) OVER
+        (
+            ORDER BY revenue DESC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_revenue
+    FROM seller_revenue
+)
+SELECT
+    seller_rank,
+    seller_id,
+    revenue,
+    CAST(
+        running_revenue * 100.0 / total_revenue
+        AS DECIMAL(5,2)
+    ) AS cumulative_pct_of_revenue,
+    CAST(
+        seller_rank * 100.0 / total_sellers
+        AS DECIMAL(5,2)
+    ) AS cumulative_pct_of_sellers
+FROM ranked
+ORDER BY seller_rank;
+GO
+
+
+/*
+Business Question:
+    Which high-value repeat customers have low recent engagement?
+
+Business Logic:
+    High-value customers are defined as the top revenue quartile.
+    Low engagement means no delivered purchase in the last 90 days
+    relative to the latest delivered purchase in the dataset.
+*/
+WITH reference_date AS
+(
+    SELECT
+        MAX(purchased_at) AS max_date
+    FROM gold.fact_sales
+    WHERE order_status = 'delivered'
+),
+customer_summary AS
+(
+    SELECT
+        c.customer_unique_id,
+        SUM(fs.total_item_value) AS lifetime_revenue,
+        COUNT(DISTINCT fs.order_id) AS order_count,
+        MAX(fs.purchased_at) AS last_purchase_date
+    FROM gold.fact_sales fs
+    JOIN gold.dim_customers c
+        ON fs.customer_key = c.customer_key
+    WHERE fs.order_status = 'delivered'
+    GROUP BY c.customer_unique_id
+),
+scored AS
+(
+    SELECT
+        *,
+        NTILE(4) OVER (ORDER BY lifetime_revenue) AS revenue_quartile,
+        DATEDIFF(
+            DAY,
+            last_purchase_date,
+            (SELECT max_date FROM reference_date)
+        ) AS days_since_last_purchase
+    FROM customer_summary
+)
+SELECT
+    customer_unique_id,
+    lifetime_revenue,
+    order_count,
+    days_since_last_purchase
+FROM scored
+WHERE revenue_quartile = 4
+  AND order_count > 1
+  AND days_since_last_purchase > 90
+ORDER BY lifetime_revenue DESC;
+GO
+
+
+/*
+Business Question:
+    Which products perform above or below their category benchmark?
+
+Business Logic:
+    Compares each product's average item value with the average
+    item value of its category.
+*/
+WITH product_orders AS
+(
+    SELECT
+        p.product_id,
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        ) AS category,
+        fs.order_id,
+        fs.total_item_value
+    FROM gold.fact_sales fs
+    JOIN gold.dim_products p
+        ON fs.product_key = p.product_key
+    WHERE fs.order_status = 'delivered'
+),
+product_avg AS
+(
+    SELECT
+        product_id,
+        category,
+        AVG(total_item_value) AS product_avg_value
+    FROM product_orders
+    GROUP BY
+        product_id,
+        category
+),
+benchmarked AS
+(
+    SELECT
+        product_id,
+        category,
+        product_avg_value,
+        AVG(product_avg_value) OVER
+        (
+            PARTITION BY category
+        ) AS category_avg_value
+    FROM product_avg
+)
+SELECT
+    product_id,
+    category,
+    product_avg_value,
+    category_avg_value,
+    CAST(
+        (product_avg_value - category_avg_value) * 100.0
+        / NULLIF(category_avg_value, 0)
+        AS DECIMAL(6,2)
+    ) AS pct_vs_category_avg
+FROM benchmarked
+ORDER BY pct_vs_category_avg DESC;
+GO
+
+
+/*
+Business Question:
+    Which product categories share the most customers?
+
+Business Logic:
+    Builds unique customer-category relationships and compares
+    every category pair to identify cross-selling opportunities.
+*/
+WITH customer_categories AS
+(
+    SELECT DISTINCT
+        c.customer_unique_id,
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        ) AS category
+    FROM gold.fact_sales fs
+    JOIN gold.dim_customers c
+        ON fs.customer_key = c.customer_key
+    JOIN gold.dim_products p
+        ON fs.product_key = p.product_key
+    WHERE fs.order_status = 'delivered'
+)
+SELECT TOP 20
+    a.category AS category_a,
+    b.category AS category_b,
+    COUNT(DISTINCT a.customer_unique_id) AS overlapping_customers
+FROM customer_categories a
+JOIN customer_categories b
+    ON a.customer_unique_id = b.customer_unique_id
+   AND a.category < b.category
+GROUP BY
+    a.category,
+    b.category
+ORDER BY overlapping_customers DESC;
+GO
+
+
+/*
+Business Question:
+    Which category-quarter combinations had no sales activity?
+
+Business Logic:
+    CROSS JOIN creates every possible category-quarter combination,
+    including combinations that do not exist in the sales data.
+*/
+WITH all_categories AS
+(
+    SELECT DISTINCT
+        COALESCE(
+            category_name_english,
+            category_name,
+            'Unknown'
+        ) AS category
+    FROM gold.dim_products
+),
+all_quarters AS
+(
+    SELECT DISTINCT
+        year,
+        quarter
+    FROM gold.dim_date
+),
+category_quarter_grid AS
+(
+    SELECT
+        c.category,
+        q.year,
+        q.quarter
+    FROM all_categories c
+    CROSS JOIN all_quarters q
+),
+actual_sales AS
+(
+    SELECT DISTINCT
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        ) AS category,
+        d.year,
+        d.quarter
+    FROM gold.fact_sales fs
+    JOIN gold.dim_products p
+        ON fs.product_key = p.product_key
+    JOIN gold.dim_date d
+        ON fs.date_key = d.date_key
+    WHERE fs.order_status = 'delivered'
+)
+SELECT
+    g.category,
+    g.year,
+    g.quarter
+FROM category_quarter_grid g
+LEFT JOIN actual_sales a
+    ON g.category = a.category
+   AND g.year = a.year
+   AND g.quarter = a.quarter
+WHERE a.category IS NULL
+ORDER BY
+    g.category,
+    g.year,
+    g.quarter;
+GO
+
+
+/*
+Business Question:
+    Which categories consistently operate at very low quarterly volume?
+
+Business Logic:
+    Starts from the complete category-quarter grid so missing sales
+    periods are treated as zero activity.
+*/
+WITH all_categories AS
+(
+    SELECT DISTINCT
+        COALESCE(
+            category_name_english,
+            category_name,
+            'Unknown'
+        ) AS category
+    FROM gold.dim_products
+),
+all_quarters AS
+(
+    SELECT DISTINCT
+        year,
+        quarter
+    FROM gold.dim_date
+),
+category_quarter_grid AS
+(
+    SELECT
+        c.category,
+        q.year,
+        q.quarter
+    FROM all_categories c
+    CROSS JOIN all_quarters q
+),
+quarter_volume AS
+(
+    SELECT
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        ) AS category,
+        d.year,
+        d.quarter,
+        COUNT(DISTINCT fs.order_id) AS order_count
+    FROM gold.fact_sales fs
+    JOIN gold.dim_products p
+        ON fs.product_key = p.product_key
+    JOIN gold.dim_date d
+        ON fs.date_key = d.date_key
+    WHERE fs.order_status = 'delivered'
+    GROUP BY
+        COALESCE(
+            p.category_name_english,
+            p.category_name,
+            'Unknown'
+        ),
+        d.year,
+        d.quarter
+),
+category_quarter_activity AS
+(
+    SELECT
+        g.category,
+        g.year,
+        g.quarter,
+        COALESCE(v.order_count, 0) AS order_count
+    FROM category_quarter_grid g
+    LEFT JOIN quarter_volume v
+        ON g.category = v.category
+       AND g.year = v.year
+       AND g.quarter = v.quarter
+)
+SELECT
+    category,
+    MAX(order_count) AS best_quarter_volume,
+    AVG(CAST(order_count AS FLOAT)) AS avg_quarterly_volume
+FROM category_quarter_activity
+GROUP BY category
+HAVING MAX(order_count) < 5
+ORDER BY avg_quarterly_volume ASC;
+GO
+
