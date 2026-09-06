@@ -1,0 +1,240 @@
+/*
+===============================================================================
+Business Analysis: Seller & Market Performance
+===============================================================================
+Business Question:
+    Who is driving the marketplace, and where is performance concentrated?
+
+Focus:
+    - Seller revenue and order volume
+    - Seller benchmarking
+    - Seller AOV and composite performance
+    - State-level marketplace performance
+    - Advanced seller comparison
+===============================================================================
+*/
+
+
+-- =============================================================================
+-- 05.1 Top Revenue-Generating Sellers
+-- =============================================================================
+/*
+Business Question:
+    Which sellers generate the highest revenue?
+*/
+
+SELECT TOP 10
+    s.seller_id,
+    SUM(fs.total_item_value) AS total_revenue
+FROM gold.fact_sales fs
+JOIN gold.dim_sellers s
+    ON fs.seller_key = s.seller_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    s.seller_id
+ORDER BY
+    total_revenue DESC;
+
+
+-- =============================================================================
+-- 05.2 Sellers with the Highest Order Volume
+-- =============================================================================
+/*
+Business Question:
+    Which sellers handle the highest number of orders?
+*/
+
+SELECT TOP 10
+    s.seller_id,
+    COUNT(DISTINCT fs.order_id) AS order_volume
+FROM gold.fact_sales fs
+JOIN gold.dim_sellers s
+    ON fs.seller_key = s.seller_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    s.seller_id
+ORDER BY
+    order_volume DESC;
+
+
+-- =============================================================================
+-- 05.3 Sellers Above the Overall Seller Average
+-- =============================================================================
+/*
+Business Question:
+    Which sellers generate more revenue than the average seller?
+*/
+
+WITH seller_revenue AS (
+    SELECT
+        s.seller_id,
+        SUM(fs.total_item_value) AS total_revenue
+    FROM gold.fact_sales fs
+    JOIN gold.dim_sellers s
+        ON fs.seller_key = s.seller_key
+    WHERE fs.order_status = 'delivered'
+    GROUP BY
+        s.seller_id
+),
+seller_benchmark AS (
+    SELECT
+        AVG(total_revenue) AS avg_seller_revenue
+    FROM seller_revenue
+)
+SELECT
+    sr.seller_id,
+    sr.total_revenue,
+    sb.avg_seller_revenue
+FROM seller_revenue sr
+CROSS JOIN seller_benchmark sb
+WHERE sr.total_revenue > sb.avg_seller_revenue
+ORDER BY
+    sr.total_revenue DESC;
+
+
+-- =============================================================================
+-- 05.4 Sellers with the Highest AOV
+-- =============================================================================
+/*
+Business Question:
+    Which sellers have the highest average order value?
+*/
+
+SELECT TOP 10
+    s.seller_id,
+    CAST(
+        SUM(fs.total_item_value)
+        / NULLIF(COUNT(DISTINCT fs.order_id), 0)
+        AS DECIMAL(18, 2)
+    ) AS seller_aov,
+    COUNT(DISTINCT fs.order_id) AS order_volume
+FROM gold.fact_sales fs
+JOIN gold.dim_sellers s
+    ON fs.seller_key = s.seller_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    s.seller_id
+ORDER BY
+    seller_aov DESC;
+
+
+-- =============================================================================
+-- 05.5 Sellers with the Strongest Overall Performance
+-- =============================================================================
+/*
+Business Question:
+    Which sellers perform strongest across revenue, volume, and AOV?
+
+Business Logic:
+    Sellers are ranked separately on each metric, then the ranks are averaged.
+    A lower composite rank indicates stronger overall performance.
+*/
+
+WITH seller_metrics AS (
+    SELECT
+        s.seller_id,
+        SUM(fs.total_item_value) AS total_revenue,
+        COUNT(DISTINCT fs.order_id) AS order_volume,
+        CAST(
+            SUM(fs.total_item_value)
+            / NULLIF(COUNT(DISTINCT fs.order_id), 0)
+            AS DECIMAL(18, 2)
+        ) AS seller_aov
+    FROM gold.fact_sales fs
+    JOIN gold.dim_sellers s
+        ON fs.seller_key = s.seller_key
+    WHERE fs.order_status = 'delivered'
+    GROUP BY
+        s.seller_id
+),
+ranked_sellers AS (
+    SELECT
+        *,
+        RANK() OVER (
+            ORDER BY total_revenue DESC
+        ) AS revenue_rank,
+        RANK() OVER (
+            ORDER BY order_volume DESC
+        ) AS volume_rank,
+        RANK() OVER (
+            ORDER BY seller_aov DESC
+        ) AS aov_rank
+    FROM seller_metrics
+)
+SELECT TOP 10
+    seller_id,
+    total_revenue,
+    order_volume,
+    seller_aov,
+    revenue_rank,
+    volume_rank,
+    aov_rank,
+    CAST(
+        (revenue_rank + volume_rank + aov_rank) / 3.0
+        AS DECIMAL(10, 2)
+    ) AS composite_rank
+FROM ranked_sellers
+ORDER BY
+    composite_rank ASC;
+
+
+-- =============================================================================
+-- 05.6 State Performance Breakdown
+-- =============================================================================
+/*
+Business Question:
+    Which states generate the most revenue, orders, and seller activity?
+*/
+
+SELECT
+    s.state,
+    SUM(fs.total_item_value) AS total_revenue,
+    COUNT(DISTINCT fs.order_id) AS order_volume,
+    COUNT(DISTINCT s.seller_id) AS active_sellers
+FROM gold.fact_sales fs
+JOIN gold.dim_sellers s
+    ON fs.seller_key = s.seller_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    s.state
+ORDER BY
+    total_revenue DESC;
+
+
+-- =============================================================================
+-- 05.7 Sellers Outperforming All Sellers in a Comparison Group
+-- =============================================================================
+/*
+Business Question:
+    Which sellers generate more revenue than every seller in São Paulo (SP)?
+
+Business Logic:
+    ALL is used to identify sellers whose revenue exceeds every seller
+    within the defined comparison group.
+*/
+
+SELECT
+    s.seller_id,
+    s.state,
+    SUM(fs.total_item_value) AS total_revenue
+FROM gold.fact_sales fs
+JOIN gold.dim_sellers s
+    ON fs.seller_key = s.seller_key
+WHERE fs.order_status = 'delivered'
+GROUP BY
+    s.seller_id,
+    s.state
+HAVING SUM(fs.total_item_value) > ALL (
+    SELECT
+        SUM(fs2.total_item_value)
+    FROM gold.fact_sales fs2
+    JOIN gold.dim_sellers s2
+        ON fs2.seller_key = s2.seller_key
+    WHERE fs2.order_status = 'delivered'
+      AND s2.state = 'SP'
+    GROUP BY
+        s2.seller_id
+)
+ORDER BY
+    total_revenue DESC;
+
