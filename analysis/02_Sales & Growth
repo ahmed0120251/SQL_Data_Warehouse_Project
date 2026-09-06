@@ -1,0 +1,393 @@
+/*
+===============================================================================
+Business Analysis: Sales & Growth
+===============================================================================
+Business Question:
+    How are sales performing and evolving over time?
+
+Focus:
+    - Sales trends and growth
+    - Cumulative revenue
+    - Category performance
+    - Revenue contribution
+    - Pareto analysis
+===============================================================================
+*/
+
+
+-- =============================================================================
+-- 01. Monthly Revenue Over Time
+-- =============================================================================
+/*
+Business Question:
+    How does monthly revenue change over time?
+*/
+
+SELECT
+    d.year,
+    d.month_number,
+    d.month_name,
+    SUM(fs.total_item_value) AS monthly_revenue
+FROM gold.fact_sales fs
+JOIN gold.dim_date d
+    ON fs.date_key = d.date_key
+GROUP BY
+    d.year,
+    d.month_number,
+    d.month_name
+ORDER BY
+    d.year,
+    d.month_number;
+
+
+-- =============================================================================
+-- 02. Monthly Order Volume Over Time
+-- =============================================================================
+/*
+Business Question:
+    How does monthly order volume change over time?
+*/
+
+SELECT
+    d.year,
+    d.month_number,
+    d.month_name,
+    COUNT(DISTINCT fs.order_id) AS monthly_orders
+FROM gold.fact_sales fs
+JOIN gold.dim_date d
+    ON fs.date_key = d.date_key
+GROUP BY
+    d.year,
+    d.month_number,
+    d.month_name
+ORDER BY
+    d.year,
+    d.month_number;
+
+
+-- =============================================================================
+-- 03. Month-over-Month Revenue Growth
+-- =============================================================================
+/*
+Business Question:
+    Which months achieved the highest revenue, and which periods
+    experienced positive or negative revenue growth?
+*/
+
+WITH monthly_revenue AS (
+    SELECT
+        d.year,
+        d.month_number,
+        d.month_name,
+        SUM(fs.total_item_value) AS monthly_revenue
+    FROM gold.fact_sales fs
+    JOIN gold.dim_date d
+        ON fs.date_key = d.date_key
+    GROUP BY
+        d.year,
+        d.month_number,
+        d.month_name
+),
+revenue_growth AS (
+    SELECT
+        year,
+        month_number,
+        month_name,
+        monthly_revenue,
+        LAG(monthly_revenue) OVER (
+            ORDER BY year, month_number
+        ) AS previous_month_revenue
+    FROM monthly_revenue
+)
+SELECT
+    year,
+    month_number,
+    month_name,
+    monthly_revenue,
+    previous_month_revenue,
+    monthly_revenue - previous_month_revenue AS revenue_change,
+    CAST(
+        (monthly_revenue - previous_month_revenue)
+        / NULLIF(previous_month_revenue, 0) * 100
+        AS DECIMAL(10, 2)
+    ) AS mom_revenue_growth_pct
+FROM revenue_growth
+ORDER BY
+    year,
+    month_number;
+
+
+-- =============================================================================
+-- 04. Month-over-Month Order Growth
+-- =============================================================================
+/*
+Business Question:
+    How does monthly order volume grow or decline over time?
+*/
+
+WITH monthly_orders AS (
+    SELECT
+        d.year,
+        d.month_number,
+        d.month_name,
+        COUNT(DISTINCT fs.order_id) AS monthly_orders
+    FROM gold.fact_sales fs
+    JOIN gold.dim_date d
+        ON fs.date_key = d.date_key
+    GROUP BY
+        d.year,
+        d.month_number,
+        d.month_name
+),
+order_growth AS (
+    SELECT
+        year,
+        month_number,
+        month_name,
+        monthly_orders,
+        LAG(monthly_orders) OVER (
+            ORDER BY year, month_number
+        ) AS previous_month_orders
+    FROM monthly_orders
+)
+SELECT
+    year,
+    month_number,
+    month_name,
+    monthly_orders,
+    previous_month_orders,
+    monthly_orders - previous_month_orders AS order_change,
+    CAST(
+        (monthly_orders - previous_month_orders)
+        / NULLIF(previous_month_orders, 0) * 100
+        AS DECIMAL(10, 2)
+    ) AS mom_order_growth_pct
+FROM order_growth
+ORDER BY
+    year,
+    month_number;
+
+
+-- =============================================================================
+-- 05. Cumulative Revenue Over Time
+-- =============================================================================
+/*
+Business Question:
+    What is the cumulative revenue generated over time?
+*/
+
+WITH monthly_revenue AS (
+    SELECT
+        d.year,
+        d.month_number,
+        d.month_name,
+        SUM(fs.total_item_value) AS monthly_revenue
+    FROM gold.fact_sales fs
+    JOIN gold.dim_date d
+        ON fs.date_key = d.date_key
+    GROUP BY
+        d.year,
+        d.month_number,
+        d.month_name
+)
+SELECT
+    year,
+    month_number,
+    month_name,
+    monthly_revenue,
+    SUM(monthly_revenue) OVER (
+        ORDER BY year, month_number
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS cumulative_revenue
+FROM monthly_revenue
+ORDER BY
+    year,
+    month_number;
+
+
+-- =============================================================================
+-- 06. Top Revenue-Generating Categories
+-- =============================================================================
+/*
+Business Question:
+    Which product categories generate the most revenue,
+    and what is each category's contribution to total revenue?
+*/
+
+WITH category_revenue AS (
+    SELECT
+        COALESCE(
+            dp.category_name_english,
+            dp.category_name,
+            'Unknown'
+        ) AS category_name,
+        SUM(fs.total_item_value) AS category_revenue
+    FROM gold.fact_sales fs
+    LEFT JOIN gold.dim_products dp
+        ON fs.product_key = dp.product_key
+    GROUP BY
+        COALESCE(
+            dp.category_name_english,
+            dp.category_name,
+            'Unknown'
+        )
+),
+total_revenue AS (
+    SELECT
+        SUM(category_revenue) AS total_revenue
+    FROM category_revenue
+)
+SELECT TOP 10
+    cr.category_name,
+    cr.category_revenue,
+    CAST(
+        cr.category_revenue / NULLIF(tr.total_revenue, 0) * 100
+        AS DECIMAL(10, 2)
+    ) AS revenue_contribution_pct
+FROM category_revenue cr
+CROSS JOIN total_revenue tr
+ORDER BY
+    cr.category_revenue DESC;
+
+
+-- =============================================================================
+-- 07. Category Growth vs. Decline
+-- =============================================================================
+/*
+Business Question:
+    Which categories are growing or declining over the analyzed period?
+*/
+
+WITH category_monthly_revenue AS (
+    SELECT
+        COALESCE(
+            dp.category_name_english,
+            dp.category_name,
+            'Unknown'
+        ) AS category_name,
+        d.year,
+        d.month_number,
+        SUM(fs.total_item_value) AS monthly_revenue
+    FROM gold.fact_sales fs
+    JOIN gold.dim_date d
+        ON fs.date_key = d.date_key
+    LEFT JOIN gold.dim_products dp
+        ON fs.product_key = dp.product_key
+    GROUP BY
+        COALESCE(
+            dp.category_name_english,
+            dp.category_name,
+            'Unknown'
+        ),
+        d.year,
+        d.month_number
+),
+ranked_months AS (
+    SELECT
+        category_name,
+        year,
+        month_number,
+        monthly_revenue,
+        ROW_NUMBER() OVER (
+            PARTITION BY category_name
+            ORDER BY year, month_number
+        ) AS first_month_rank,
+        ROW_NUMBER() OVER (
+            PARTITION BY category_name
+            ORDER BY year DESC, month_number DESC
+        ) AS last_month_rank
+    FROM category_monthly_revenue
+),
+category_trend AS (
+    SELECT
+        category_name,
+        MAX(
+            CASE
+                WHEN first_month_rank = 1
+                THEN monthly_revenue
+            END
+        ) AS first_month_revenue,
+        MAX(
+            CASE
+                WHEN last_month_rank = 1
+                THEN monthly_revenue
+            END
+        ) AS last_month_revenue
+    FROM ranked_months
+    GROUP BY
+        category_name
+)
+SELECT
+    category_name,
+    first_month_revenue,
+    last_month_revenue,
+    last_month_revenue - first_month_revenue AS revenue_change,
+    CAST(
+        (last_month_revenue - first_month_revenue)
+        / NULLIF(first_month_revenue, 0) * 100
+        AS DECIMAL(10, 2)
+    ) AS revenue_change_pct,
+    CASE
+        WHEN last_month_revenue > first_month_revenue
+            THEN 'Growing'
+        WHEN last_month_revenue < first_month_revenue
+            THEN 'Declining'
+        ELSE 'Stable'
+    END AS category_trend
+FROM category_trend
+ORDER BY
+    revenue_change_pct DESC;
+
+
+-- =============================================================================
+-- 08. Pareto Analysis: Categories Driving ~80% of Revenue
+-- =============================================================================
+/*
+Business Question:
+    Which categories account for approximately 80% of total revenue?
+*/
+
+WITH category_revenue AS (
+    SELECT
+        COALESCE(
+            dp.category_name_english,
+            dp.category_name,
+            'Unknown'
+        ) AS category_name,
+        SUM(fs.total_item_value) AS category_revenue
+    FROM gold.fact_sales fs
+    LEFT JOIN gold.dim_products dp
+        ON fs.product_key = dp.product_key
+    GROUP BY
+        COALESCE(
+            dp.category_name_english,
+            dp.category_name,
+            'Unknown'
+        )
+),
+category_pareto AS (
+    SELECT
+        category_name,
+        category_revenue,
+        SUM(category_revenue) OVER (
+            ORDER BY category_revenue DESC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS cumulative_revenue,
+        SUM(category_revenue) OVER () AS total_revenue
+    FROM category_revenue
+)
+SELECT
+    category_name,
+    category_revenue,
+    CAST(
+        category_revenue / NULLIF(total_revenue, 0) * 100
+        AS DECIMAL(10, 2)
+    ) AS revenue_contribution_pct,
+    CAST(
+        cumulative_revenue / NULLIF(total_revenue, 0) * 100
+        AS DECIMAL(10, 2)
+    ) AS cumulative_revenue_pct
+FROM category_pareto
+WHERE cumulative_revenue - category_revenue < total_revenue * 0.80
+ORDER BY
+    category_revenue DESC;
