@@ -1,0 +1,105 @@
+/*
+===============================================================================
+Business Analysis: Payment & Order Behavior
+===============================================================================
+Business Question:
+    How do customers pay, and how does payment behavior relate to
+    order value and purchasing behavior?
+
+Focus:
+    - Payment method usage and value
+    - Average payment amount and installments
+    - Installment behavior by order value
+    - Payment behavior over time
+===============================================================================
+*/
+
+
+/*
+Business Question:
+    Which payment methods are used most frequently and generate the highest value?
+*/
+SELECT
+    payment_method,
+    COUNT(*) AS payment_count,
+    SUM(payment_amount) AS total_payment_value,
+    AVG(payment_amount) AS avg_payment_amount
+FROM gold.fact_payments
+GROUP BY payment_method
+ORDER BY total_payment_value DESC;
+GO
+
+
+/*
+Business Question:
+    What is the average payment amount and installment count?
+*/
+SELECT
+    AVG(payment_amount) AS avg_payment_amount,
+    AVG(CAST(installments_count AS FLOAT)) AS avg_installments
+FROM gold.fact_payments;
+GO
+
+
+/*
+Business Question:
+    Do higher-value orders lead to higher installment usage?
+
+Business Logic:
+    First aggregate payments to the order level, then classify orders
+    based on their total payment value.
+*/
+WITH order_payments AS
+(
+    SELECT
+        order_id,
+        SUM(payment_amount) AS order_value,
+        AVG(CAST(installments_count AS FLOAT)) AS avg_installments
+    FROM gold.fact_payments
+    GROUP BY order_id
+)
+SELECT
+    CASE
+        WHEN order_value < 100 THEN 'Under 100'
+        WHEN order_value < 300 THEN '100-299'
+        WHEN order_value < 600 THEN '300-599'
+        ELSE '600+'
+    END AS order_value_band,
+    COUNT(*) AS order_count,
+    AVG(avg_installments) AS avg_installments
+FROM order_payments
+GROUP BY
+    CASE
+        WHEN order_value < 100 THEN 'Under 100'
+        WHEN order_value < 300 THEN '100-299'
+        WHEN order_value < 600 THEN '300-599'
+        ELSE '600+'
+    END
+ORDER BY
+    MIN(order_value);
+GO
+
+
+/*
+Business Question:
+    How does payment method usage and value change over time?
+*/
+SELECT
+    d.year,
+    d.month_number,
+    fp.payment_method,
+    COUNT(*) AS payment_count,
+    SUM(fp.payment_amount) AS total_payment_value
+FROM gold.fact_payments AS fp
+JOIN gold.dim_date AS d
+    ON fp.date_key = d.date_key
+GROUP BY
+    d.year,
+    d.month_number,
+    fp.payment_method
+ORDER BY
+    d.year,
+    d.month_number,
+    total_payment_value DESC;
+GO
+
