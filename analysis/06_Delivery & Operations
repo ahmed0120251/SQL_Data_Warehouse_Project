@@ -1,0 +1,295 @@
+/*
+===============================================================================
+Business Analysis: Delivery & Operations
+===============================================================================
+Business Question:
+    How efficient is the order fulfillment process, and how does it
+    affect customer experience?
+
+Focus:
+    - Delivery speed
+    - On-time and late delivery
+    - Geographic and category performance
+    - Delivery trends
+    - Seller delay rates
+===============================================================================
+*/
+
+
+-- =============================================================================
+-- 06.1 Average and Median Delivery Time
+-- =============================================================================
+/*
+Business Question:
+    What are the average and median delivery times?
+
+Business Logic:
+    Median is included because average delivery time can be affected
+    by extreme delays.
+*/
+
+SELECT
+    CAST(
+        AVG(CAST(delivery_days AS FLOAT))
+        AS DECIMAL(10, 2)
+    ) AS avg_delivery_days,
+    CAST(
+        PERCENTILE_CONT(0.5)
+        WITHIN GROUP (ORDER BY delivery_days)
+        OVER ()
+        AS DECIMAL(10, 2)
+    ) AS median_delivery_days
+FROM (
+    SELECT DISTINCT
+        order_id,
+        delivery_days
+    FROM gold.fact_sales
+    WHERE order_status = 'delivered'
+      AND delivery_days IS NOT NULL
+) orders;
+
+
+-- =============================================================================
+-- 06.2 On-Time vs. Late Delivery Rate
+-- =============================================================================
+/*
+Business Question:
+    What percentage of delivered orders were on time versus late?
+*/
+
+WITH order_delivery AS (
+    SELECT DISTINCT
+        order_id,
+        delivered_at,
+        estimated_delivery_at
+    FROM gold.fact_sales
+    WHERE order_status = 'delivered'
+      AND delivered_at IS NOT NULL
+      AND estimated_delivery_at IS NOT NULL
+)
+SELECT
+    CASE
+        WHEN delivered_at <= estimated_delivery_at
+            THEN 'On-time'
+        ELSE 'Late'
+    END AS delivery_status,
+    COUNT(*) AS order_count,
+    CAST(
+        COUNT(*) * 100.0
+        / SUM(COUNT(*)) OVER ()
+        AS DECIMAL(5, 2)
+    ) AS pct_of_orders
+FROM order_delivery
+GROUP BY
+    CASE
+        WHEN delivered_at <= estimated_delivery_at
+            THEN 'On-time'
+        ELSE 'Late'
+    END
+ORDER BY
+    order_count DESC;
+
+
+-- =============================================================================
+-- 06.3 States with the Longest Delivery Times
+-- =============================================================================
+/*
+Business Question:
+    Which customer states have the longest average delivery times?
+*/
+
+WITH order_delivery AS (
+    SELECT DISTINCT
+        fs.order_id,
+        fs.customer_key,
+        fs.delivery_days
+    FROM gold.fact_sales fs
+    WHERE fs.order_status = 'delivered'
+      AND fs.delivery_days IS NOT NULL
+)
+SELECT TOP 10
+    c.state,
+    CAST(
+        AVG(CAST(od.delivery_days AS FLOAT))
+        AS DECIMAL(10, 2)
+    ) AS avg_delivery_days
+FROM order_delivery od
+JOIN gold.dim_customers c
+    ON od.customer_key = c.customer_key
+GROUP BY
+    c.state
+ORDER BY
+    avg_delivery_days DESC;
+
+
+-- =============================================================================
+-- 06.4 Categories with the Longest Delivery Times
+-- =============================================================================
+/*
+Business Question:
+    Which product categories have the longest average delivery times?
+*/
+
+WITH category_orders AS (
+    SELECT
+        fs.order_id,
+        p.category_name_english,
+        fs.delivery_days
+    FROM gold.fact_sales fs
+    JOIN gold.dim_products p
+        ON fs.product_key = p.product_key
+    WHERE fs.order_status = 'delivered'
+      AND fs.delivery_days IS NOT NULL
+),
+category_delivery AS (
+    SELECT
+        category_name_english,
+        order_id,
+        MAX(delivery_days) AS delivery_days
+    FROM category_orders
+    GROUP BY
+        category_name_english,
+        order_id
+)
+SELECT TOP 10
+    COALESCE(
+        category_name_english,
+        'Unknown'
+    ) AS category_name,
+    CAST(
+        AVG(CAST(delivery_days AS FLOAT))
+        AS DECIMAL(10, 2)
+    ) AS avg_delivery_days
+FROM category_delivery
+GROUP BY
+    category_name_english
+ORDER BY
+    avg_delivery_days DESC;
+
+
+-- =============================================================================
+-- 06.5 Delivery Performance Over Time
+-- =============================================================================
+/*
+Business Question:
+    Which periods show improving or deteriorating delivery performance?
+*/
+
+WITH monthly_delivery AS (
+    SELECT
+        d.year,
+        d.month_number,
+        CAST(
+            AVG(CAST(fs.delivery_days AS FLOAT))
+            AS DECIMAL(10, 2)
+        ) AS avg_delivery_days
+    FROM (
+        SELECT DISTINCT
+            order_id,
+            date_key,
+            delivery_days
+        FROM gold.fact_sales
+        WHERE order_status = 'delivered'
+          AND delivery_days IS NOT NULL
+    ) fs
+    JOIN gold.dim_date d
+        ON fs.date_key = d.date_key
+    GROUP BY
+        d.year,
+        d.month_number
+),
+delivery_trend AS (
+    SELECT
+        year,
+        month_number,
+        avg_delivery_days,
+        LAG(avg_delivery_days) OVER (
+            ORDER BY year, month_number
+        ) AS previous_month_avg
+    FROM monthly_delivery
+)
+SELECT
+    year,
+    month_number,
+    avg_delivery_days,
+    previous_month_avg,
+    avg_delivery_days - previous_month_avg AS change_vs_previous_month,
+    CASE
+        WHEN avg_delivery_days < previous_month_avg
+            THEN 'Improving'
+        WHEN avg_delivery_days > previous_month_avg
+            THEN 'Deteriorating'
+        ELSE 'Stable'
+    END AS delivery_trend
+FROM delivery_trend
+ORDER BY
+    year,
+    month_number;
+
+
+-- =============================================================================
+-- 06.6 Sellers with the Highest Delay Rates
+-- =============================================================================
+/*
+Business Question:
+    Which sellers have the highest late-delivery rates?
+
+Business Logic:
+    Late rate is calculated at order level and sellers with fewer than
+    10 delivered orders are excluded.
+*/
+
+WITH seller_orders AS (
+    SELECT DISTINCT
+        fs.order_id,
+        fs.seller_key,
+        fs.delivered_at,
+        fs.estimated_delivery_at
+    FROM gold.fact_sales fs
+    WHERE fs.order_status = 'delivered'
+      AND fs.delivered_at IS NOT NULL
+      AND fs.estimated_delivery_at IS NOT NULL
+)
+SELECT TOP 10
+    s.seller_id,
+    COUNT(*) AS total_delivered_orders,
+    SUM(
+        CASE
+            WHEN so.delivered_at > so.estimated_delivery_at
+                THEN 1
+            ELSE 0
+        END
+    ) AS late_orders,
+    CAST(
+        SUM(
+            CASE
+                WHEN so.delivered_at > so.estimated_delivery_at
+                    THEN 1
+                ELSE 0
+            END
+        ) * 100.0 / COUNT(*)
+        AS DECIMAL(5, 2)
+    ) AS late_rate_pct
+FROM seller_orders so
+JOIN gold.dim_sellers s
+    ON so.seller_key = s.seller_key
+GROUP BY
+    s.seller_id
+HAVING
+    COUNT(*) >= 10
+ORDER BY
+    late_rate_pct DESC;
+
+
+-- =============================================================================
+-- 06.7 Delivery Performance vs. Review Scores
+-- =============================================================================
+/*
+Business Question:
+    How does delivery performance relate to customer review scores?
+
+Note:
+    Review data is not currently exposed in the Gold schema.
+    This analysis requires a review fact/view to be added to Gold.
+*/
+
