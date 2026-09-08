@@ -104,16 +104,29 @@ GO
 -- Grain: one row per distinct calendar date found in order_purchase_timestamp
 -- =============================================================================
 CREATE OR ALTER VIEW gold.dim_date AS
-SELECT DISTINCT
-    CAST(order_purchase_timestamp AS DATE)      AS date_key,      -- Join key to fact tables
-    YEAR(order_purchase_timestamp)              AS year,
-    MONTH(order_purchase_timestamp)             AS month_number,
-    DATENAME(MONTH, order_purchase_timestamp)   AS month_name,
-    DAY(order_purchase_timestamp)               AS day_number,
-    DATENAME(WEEKDAY, order_purchase_timestamp) AS day_name,
-    DATEPART(QUARTER, order_purchase_timestamp) AS quarter
-FROM silver.crm_orders
-WHERE order_purchase_timestamp IS NOT NULL;
+WITH date_bounds AS (
+    SELECT
+        MIN(CAST(order_purchase_timestamp AS DATE)) AS min_date,
+        MAX(CAST(order_purchase_timestamp AS DATE)) AS max_date
+    FROM silver.crm_orders
+    WHERE order_purchase_timestamp IS NOT NULL
+),
+tally AS (
+    SELECT TOP (SELECT DATEDIFF(DAY, min_date, max_date) + 1 FROM date_bounds)
+        ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS day_offset
+    FROM sys.all_objects a
+    CROSS JOIN sys.all_objects b
+)
+SELECT
+    DATEADD(DAY, t.day_offset, db.min_date)         AS date_key,  -- Join key to fact tables
+    YEAR(DATEADD(DAY, t.day_offset, db.min_date))   AS year,
+    MONTH(DATEADD(DAY, t.day_offset, db.min_date))  AS month_number,
+    DATENAME(MONTH, DATEADD(DAY, t.day_offset, db.min_date))   AS month_name,
+    DAY(DATEADD(DAY, t.day_offset, db.min_date))    AS day_number,
+    DATENAME(WEEKDAY, DATEADD(DAY, t.day_offset, db.min_date)) AS day_name,
+    DATEPART(QUARTER, DATEADD(DAY, t.day_offset, db.min_date)) AS quarter
+FROM tally t
+CROSS JOIN date_bounds db;
 GO
 
 
@@ -156,11 +169,13 @@ GO
 CREATE OR ALTER VIEW gold.fact_payments AS
 SELECT
     p.order_id                               AS order_id,
+	cu.customer_key                          AS customer_key,
     p.payment_sequential                     AS payment_sequence,
     p.payment_type                           AS payment_method,
     p.payment_installments                   AS installments_count,
     p.payment_value                          AS payment_amount,
     CAST(o.order_purchase_timestamp AS DATE) AS date_key            -- FK to dim_date
 FROM silver.crm_order_payments p
-JOIN silver.crm_orders o ON p.order_id = o.order_id;
+JOIN silver.crm_orders o ON p.order_id = o.order_id
+LEFT JOIN gold.dim_customers cu ON o.customer_id = cu.customer_id;
 GO
